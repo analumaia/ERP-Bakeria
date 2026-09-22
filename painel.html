@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel — ERP Bakeria</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="favicon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="cabecalho">
+  <div class="container">
+    <div class="cabecalho-interno">
+      <div class="logo-caixa"><img src="logo.png" alt="Bakeria Confeitaria Artesanal"></div>
+      <img class="mascote-cabecalho" src="mascote-cabecalho.png" alt="">
+      <button class="btn-sair" id="btnSair">Sair</button>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+
+  <nav class="abas-modulos" id="abasModulos"></nav>
+
+  <!-- DASHBOARD -->
+  <section class="conteudo-modulo" data-modulo="dashboard">
+    <div class="barra-modulo"><h2>Visão geral</h2></div>
+    <div class="lista-cards" id="listaDashboard"></div>
+  </section>
+
+  <!-- ESTOQUE -->
+  <section class="conteudo-modulo" data-modulo="estoque">
+    <div class="barra-modulo"><h2>Estoque</h2></div>
+
+    <div class="barra-modulo">
+      <select id="buscaItemEstoque" class="campo-busca" style="max-width:380px; font-size:0.95rem; padding:12px 16px;">
+        <option value="">Buscar insumo ou produto...</option>
+      </select>
+    </div>
+
+    <div id="areaItemEstoque">
+      <div class="lista-vazia">Busque um insumo ou produto acima pra ver o saldo, o resumo e o extrato completo de movimentações dele.</div>
+    </div>
+  </section>
+
+  <!-- COMPRAS -->
+  <section class="conteudo-modulo" data-modulo="compras">
+    <div class="barra-modulo">
+      <h2>Compras</h2>
+      <button class="btn-novo" id="btnNovaCompra">+ Nova compra</button>
+    </div>
+    <div class="lista-cards" id="listaCompras"></div>
+  </section>
+
+  <!-- PRODUÇÃO -->
+  <section class="conteudo-modulo" data-modulo="producao">
+    <div class="barra-modulo">
+      <h2>Produção</h2>
+      <button class="btn-novo" id="btnNovaProducao">+ Nova produção</button>
+    </div>
+
+    <h3 class="fonte-titulo" style="font-size:1.1rem; margin:10px 0;">Fichas técnicas</h3>
+    <div class="lista-cards" id="listaFichasTecnicas"></div>
+
+    <h3 class="fonte-titulo" style="font-size:1.1rem; margin:26px 0 10px;">Histórico de produções</h3>
+    <div class="lista-cards" id="listaProducoes"></div>
+  </section>
+
+  <!-- VENDAS -->
+  <section class="conteudo-modulo" data-modulo="vendas">
+    <div class="barra-modulo"><h2>Vendas</h2></div>
+
+    <div class="lista-cards" id="resumoVendas" style="margin-bottom:20px;"></div>
+
+    <div class="cartao-item" style="margin-bottom:24px;">
+      <div class="titulo-item"><span>Novo pedido</span></div>
+
+      <div class="form-linha-dupla" style="margin-top:10px;">
+        <div class="form-grupo">
+          <label for="campoClienteVenda">Cliente</label>
+          <select id="campoClienteVenda"><option value="">Sem cliente</option></select>
+        </div>
+        <div class="form-grupo">
+          <label for="campoFormaPagamentoVenda">Forma de pagamento</label>
+          <select id="campoFormaPagamentoVenda"><option value="">Não definida</option></select>
+        </div>
+      </div>
+      <div class="form-grupo">
+        <label for="campoDataVenda">Data</label>
+        <input type="date" id="campoDataVenda">
+      </div>
+
+      <div class="form-linha-dupla" style="align-items:end;">
+        <div class="form-grupo">
+          <label for="campoProdutoVenda">Produto</label>
+          <select id="campoProdutoVenda"><option value="">Escolha um produto</option></select>
+        </div>
+        <div class="form-grupo" style="display:flex; gap:8px;">
+          <div style="flex:1;">
+            <label for="campoQuantidadeVenda">Quantidade</label>
+            <input type="number" id="campoQuantidadeVenda" value="1" min="1" step="1">
+          </div>
+          <button type="button" class="btn-secundario" id="btnAdicionarItemVenda" style="flex:none; align-self:flex-end; padding:10px 16px;">Adicionar item</button>
+        </div>
+      </div>
+
+      <div id="itensVendaLista" style="margin:10px 0;"></div>
+
+      <div class="form-grupo">
+        <label for="campoObservacaoVenda">Observação</label>
+        <textarea id="campoObservacaoVenda" rows="2" placeholder="Recheio sem nozes, entrega às 15h..." style="width:100%; padding:10px 12px; border-radius:10px; border:1.5px solid var(--marrom-claro); font-family:inherit; font-size:0.92rem; resize:vertical;"></textarea>
+      </div>
+      <div class="form-grupo">
+        <label for="campoDescontoVenda">Desconto (R$)</label>
+        <input type="number" id="campoDescontoVenda" value="0" min="0" step="0.01">
+      </div>
+      <div class="form-grupo">
+        <label for="campoFreteVenda">Frete (R$)</label>
+        <input type="number" id="campoFreteVenda" value="0" min="0" step="0.01">
+      </div>
+
+      <div class="cartao-item" style="background:var(--bege-claro); box-shadow:none; margin-top:6px;">
+        <div class="linha-info"><span>Total do pedido</span><span id="totalPedidoVenda">R$ 0,00</span></div>
+        <div class="linha-info"><span>Desconto</span><span id="descontoPedidoVenda" class="valor-saida">− R$ 0,00</span></div>
+        <div class="linha-info"><span>Taxa</span><span id="taxaPedidoVenda" class="valor-saida">− R$ 0,00</span></div>
+        <div class="linha-info"><span>Frete</span><span id="fretePedidoVenda" class="valor-saida">− R$ 0,00</span></div>
+        <div class="linha-info" style="font-weight:700; border-top:1px solid var(--bege); padding-top:6px; margin-top:2px;"><span>Você recebe</span><span id="liquidoPedidoVenda">R$ 0,00</span></div>
+      </div>
+
+      <button type="button" class="btn-primario" id="btnRegistrarVenda" style="max-width:260px; margin-left:auto; display:block;">Registrar pedido</button>
+    </div>
+
+    <h3 class="fonte-titulo" style="font-size:1.1rem; margin:10px 0;">Pedidos registrados</h3>
+    <div class="lista-cards" id="listaVendas"></div>
+  </section>
+
+  <!-- FINANCEIRO -->
+  <section class="conteudo-modulo" data-modulo="financeiro">
+    <div class="barra-modulo">
+      <h2>Financeiro</h2>
+      <input type="month" id="filtroMesFinanceiro" class="campo-busca" style="max-width:160px;">
+      <button class="btn-novo" id="btnNovoLancamento">+ Lançamento manual</button>
+    </div>
+
+    <div class="lista-cards" id="resumoFinanceiro" style="margin-bottom:8px;"></div>
+
+    <h3 class="fonte-titulo" style="font-size:1.1rem; margin:26px 0 10px;">Lançamentos do mês</h3>
+    <div class="lista-cards" id="listaLancamentos"></div>
+  </section>
+
+  <!-- INSUMOS -->
+  <section class="conteudo-modulo" data-modulo="insumos">
+    <div class="barra-modulo">
+      <h2>Insumos</h2>
+      <input type="search" class="campo-busca" placeholder="Buscar insumo..." data-busca="insumos">
+      <button class="btn-novo" data-novo="insumos">+ Novo insumo</button>
+    </div>
+    <div class="lista-cards" data-lista="insumos"></div>
+  </section>
+
+  <!-- PRODUTOS -->
+  <section class="conteudo-modulo" data-modulo="produtos">
+    <div class="barra-modulo">
+      <h2>Produtos</h2>
+      <input type="search" class="campo-busca" placeholder="Buscar produto..." data-busca="produtos">
+      <button class="btn-novo" data-novo="produtos">+ Novo produto</button>
+    </div>
+    <div class="lista-cards" data-lista="produtos"></div>
+  </section>
+
+  <!-- FORNECEDORES -->
+  <section class="conteudo-modulo" data-modulo="fornecedores">
+    <div class="barra-modulo">
+      <h2>Fornecedores</h2>
+      <input type="search" class="campo-busca" placeholder="Buscar fornecedor..." data-busca="fornecedores">
+      <button class="btn-novo" data-novo="fornecedores">+ Novo fornecedor</button>
+    </div>
+    <div class="lista-cards" data-lista="fornecedores"></div>
+  </section>
+
+  <!-- CLIENTES -->
+  <section class="conteudo-modulo" data-modulo="clientes">
+    <div class="barra-modulo">
+      <h2>Clientes</h2>
+      <input type="search" class="campo-busca" placeholder="Buscar cliente..." data-busca="clientes">
+      <button class="btn-novo" data-novo="clientes">+ Novo cliente</button>
+    </div>
+    <div class="lista-cards" data-lista="clientes"></div>
+  </section>
+
+  <!-- CONFIGURAÇÕES -->
+  <section class="conteudo-modulo" data-modulo="configuracoes">
+    <div class="barra-modulo"><h2>Configurações</h2></div>
+
+    <h3 class="fonte-titulo" style="font-size:1.1rem; margin:10px 0;">Metas mensais</h3>
+    <div class="barra-modulo">
+      <input type="month" id="filtroMesMetas" class="campo-busca" style="max-width:160px;">
+      <button class="btn-novo" id="btnNovaMeta">+ Nova meta</button>
+    </div>
+    <div class="lista-cards" id="listaMetas"></div>
+
+    <h3 class="fonte-titulo" style="font-size:1.1rem; margin:26px 0 10px;">Formas de pagamento</h3>
+    <p style="font-size:0.82rem; color:var(--marrom-cafe); margin-top:-4px;">A taxa configurada aqui é aplicada automaticamente sobre o valor de cada venda feita com essa forma de pagamento.</p>
+    <div class="barra-modulo">
+      <button class="btn-novo" id="btnNovaFormaPagamento">+ Nova forma de pagamento</button>
+    </div>
+    <div class="lista-cards" id="listaFormasPagamento"></div>
+  </section>
+
+</div>
+
+<!-- MODAL genérico de criar/editar, preenchido dinamicamente pelo JS -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <h3 id="modalTitulo">Novo registro</h3>
+    <form id="modalForm">
+      <div id="modalCampos"></div>
+      <div class="acoes-modal">
+        <button type="button" class="btn-secundario" id="btnCancelarModal">Cancelar</button>
+        <button type="submit" class="btn-primario" id="btnSalvarModal">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script src="core.js"></script>
+<script src="cadastros.js"></script>
+<script src="dashboard.js"></script>
+<script src="estoque.js"></script>
+<script src="compras.js"></script>
+<script src="producao.js"></script>
+<script src="vendas.js"></script>
+<script src="financeiro.js"></script>
+<script src="configuracoes.js"></script>
+<script src="init.js"></script>
+</body>
+</html>
