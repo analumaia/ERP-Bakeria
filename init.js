@@ -18,21 +18,6 @@ modalForm.addEventListener('submit', async (evento) => {
     return;
   }
 
-  if (modoModal.modo === 'compra'){
-    await salvarNovaCompra();
-    return;
-  }
-
-  if (modoModal.modo === 'ficha_tecnica'){
-    await salvarFichaTecnica();
-    return;
-  }
-
-  if (modoModal.modo === 'producao'){
-    await salvarNovaProducao();
-    return;
-  }
-
   if (modoModal.modo === 'lancamento'){
     await salvarNovoLancamento();
     return;
@@ -48,8 +33,12 @@ modalForm.addEventListener('submit', async (evento) => {
     return;
   }
 
-  // nenhum modo específico bateu — é um cadastro genérico
-  // (insumos, produtos, fornecedores ou clientes)
+  if (modoModal.modo === 'categoria_financeira'){
+    await salvarNovaCategoriaFinanceira();
+    return;
+  }
+
+  // nenhum modo específico bateu — é um cadastro genérico (hoje só fornecedores)
   await salvarRegistroCadastro();
 });
 
@@ -58,7 +47,5 @@ modalForm.addEventListener('submit', async (evento) => {
 // --------------------------------------------------------
 montarAbas();
 carregarDashboard();
-document.getElementById('filtroMesFinanceiro').value = new Date().toISOString().slice(0, 7);
-document.getElementById('filtroMesFinanceiro').addEventListener('change', carregarFinanceiro);
-document.getElementById('filtroMesMetas').value = new Date().toISOString().slice(0, 7);
+document.getElementById('filtroMesMetas').value = mesAtualISO();
 document.getElementById('filtroMesMetas').addEventListener('change', carregarMetas);

@@ -7,7 +7,7 @@
 // METAS
 // --------------------------------------------------------
 async function carregarMetas(){
-  const mesAno = document.getElementById('filtroMesMetas').value || new Date().toISOString().slice(0, 7);
+  const mesAno = document.getElementById('filtroMesMetas').value || mesAtualISO();
   const container = document.getElementById('listaMetas');
   container.innerHTML = '<div class="lista-vazia">Carregando...</div>';
 
@@ -26,7 +26,7 @@ async function carregarMetas(){
   const formatarMoeda = v => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   container.innerHTML = data.map(m => `
     <div class="cartao-item">
-      <div class="titulo-item"><span>${m.nome}</span></div>
+      <div class="titulo-item"><span>${esc(m.nome)}</span></div>
       <div class="linha-info"><span>Meta de faturamento</span><span>${formatarMoeda(Number(m.valor_meta))}</span></div>
       <div class="acoes-item">
         <button class="btn-acao" data-editar-meta="${m.id}">Editar</button>
@@ -58,12 +58,12 @@ async function excluirMeta(id){
 
 function abrirModalMeta(metaExistente){
   modoModal = { modo: 'meta', id: metaExistente ? metaExistente.id : null };
-  const mesAtual = document.getElementById('filtroMesMetas').value || new Date().toISOString().slice(0, 7);
+  const mesAtual = document.getElementById('filtroMesMetas').value || mesAtualISO();
   modalTitulo.textContent = metaExistente ? 'Editar meta mensal' : 'Nova meta mensal';
   modalCampos.innerHTML = `
     <div class="form-grupo">
       <label for="campoNomeMeta">Nome da meta</label>
-      <input type="text" id="campoNomeMeta" placeholder="Ex: Otimista, Realista, Meta do mês..." value="${metaExistente ? metaExistente.nome : 'Meta do mês'}">
+      <input type="text" id="campoNomeMeta" placeholder="Ex: Otimista, Realista, Meta do mês..." value="${metaExistente ? esc(metaExistente.nome) : 'Meta do mês'}">
     </div>
     <div class="form-grupo">
       <label for="campoMesMeta">Mês</label>
@@ -105,7 +105,7 @@ async function salvarNovaMeta(){
   btnSalvar.textContent = 'Salvar';
 
   if (erro){
-    mostrarToast('Não foi possível salvar a meta.', 'erro');
+    mostrarToast(erro.message || 'Não foi possível salvar a meta.', 'erro');
     return;
   }
 
@@ -138,7 +138,7 @@ async function carregarFormasPagamento(){
 
   container.innerHTML = data.map(f => `
     <div class="cartao-item">
-      <div class="titulo-item"><span>${f.nome}</span></div>
+      <div class="titulo-item"><span>${esc(f.nome)}</span></div>
       <div class="linha-info"><span>Taxa</span><span>${Number(f.taxa_percentual).toLocaleString('pt-BR')}%</span></div>
       <div class="acoes-item">
         <button class="btn-acao" data-editar-forma="${f.id}">Editar</button>
@@ -172,7 +172,7 @@ function abrirModalFormaPagamento(formaExistente){
   modalCampos.innerHTML = `
     <div class="form-grupo">
       <label for="campoNomeForma">Nome</label>
-      <input type="text" id="campoNomeForma" placeholder="Ex: Pix, Cartão de crédito, Dinheiro..." value="${formaExistente ? formaExistente.nome : ''}">
+      <input type="text" id="campoNomeForma" placeholder="Ex: Pix, Cartão de crédito, Dinheiro..." value="${formaExistente ? esc(formaExistente.nome) : ''}">
     </div>
     <div class="form-grupo">
       <label for="campoTaxaForma">Taxa cobrada (%)</label>
@@ -209,7 +209,7 @@ async function salvarNovaFormaPagamento(){
   btnSalvar.textContent = 'Salvar';
 
   if (erro){
-    mostrarToast('Não foi possível salvar.', 'erro');
+    mostrarToast(erro.message || 'Não foi possível salvar.', 'erro');
     return;
   }
 
@@ -217,3 +217,178 @@ async function salvarNovaFormaPagamento(){
   fecharModal();
   carregarFormasPagamento();
 }
+
+// --------------------------------------------------------
+// CATEGORIAS FINANCEIRAS
+// (GRUPOS_DRE é definido em caixa.js, carregado antes deste arquivo)
+// --------------------------------------------------------
+async function carregarCategoriasFinanceiras(){
+  const corpo = document.getElementById('corpoTabelaCategoriasFinanceiras');
+  corpo.innerHTML = '<tr><td colspan="5" class="lista-vazia">Carregando...</td></tr>';
+
+  const { data, error } = await supabaseClient
+    .from('categorias_financeiras')
+    .select('*')
+    .order('grupo_dre')
+    .order('nome');
+
+  if (error){
+    corpo.innerHTML = '<tr><td colspan="5" class="lista-vazia">Não foi possível carregar as categorias. Se ainda não rodou, execute o SQL <strong>migracao-categorias-financeiras.sql</strong> no Supabase.</td></tr>';
+    return;
+  }
+
+  dadosCarregados.categoriasFinanceiras = data;
+
+  if (data.length === 0){
+    corpo.innerHTML = '<tr><td colspan="5" class="lista-vazia">Nenhuma categoria cadastrada ainda.</td></tr>';
+    return;
+  }
+
+  corpo.innerHTML = data.map(c => `
+    <tr>
+      <td class="celula-principal">${esc(c.nome)}</td>
+      <td>${c.tipo === 'entrada' ? 'Entrada' : 'Saída'}</td>
+      <td>${rotuloGrupoDre(c.grupo_dre)}</td>
+      <td><button type="button" class="btn-acao" data-editar-categoria-financeira="${c.id}">Editar</button></td>
+      <td><button type="button" class="btn-acao excluir" data-excluir-categoria-financeira="${c.id}">Excluir</button></td>
+    </tr>
+  `).join('');
+
+  corpo.querySelectorAll('[data-editar-categoria-financeira]').forEach(botao => {
+    botao.addEventListener('click', () => abrirModalCategoriaFinanceira(dadosCarregados.categoriasFinanceiras.find(c => String(c.id) === botao.dataset.editarCategoriaFinanceira)));
+  });
+  corpo.querySelectorAll('[data-excluir-categoria-financeira]').forEach(botao => {
+    botao.addEventListener('click', () => excluirCategoriaFinanceira(botao.dataset.excluirCategoriaFinanceira));
+  });
+}
+
+function opcoesGrupoDreHtml(selecionado){
+  return GRUPOS_DRE.map(g => `<option value="${g.codigo}"${g.codigo === selecionado ? ' selected' : ''}>${g.label}</option>`).join('');
+}
+
+function abrirModalCategoriaFinanceira(categoriaExistente){
+  modoModal = { modo: 'categoria_financeira', id: categoriaExistente ? categoriaExistente.id : null };
+  modalTitulo.textContent = categoriaExistente ? 'Editar categoria financeira' : 'Nova categoria financeira';
+  modalCampos.innerHTML = `
+    <div class="form-grupo">
+      <label for="campoNomeCategoriaFinanceira">Nome</label>
+      <input type="text" id="campoNomeCategoriaFinanceira" placeholder="Ex: Aluguel, Comissão, Venda de produto..." value="${categoriaExistente ? esc(categoriaExistente.nome) : ''}">
+    </div>
+    <div class="form-grupo">
+      <label for="campoTipoCategoriaFinanceira">Tipo</label>
+      <select id="campoTipoCategoriaFinanceira">
+        <option value="entrada"${categoriaExistente && categoriaExistente.tipo === 'entrada' ? ' selected' : ''}>Entrada</option>
+        <option value="saida"${!categoriaExistente || categoriaExistente.tipo === 'saida' ? ' selected' : ''}>Saída</option>
+      </select>
+    </div>
+    <div class="form-grupo">
+      <label for="campoGrupoCategoriaFinanceira">Grupo do DRE</label>
+      <select id="campoGrupoCategoriaFinanceira">${opcoesGrupoDreHtml(categoriaExistente ? categoriaExistente.grupo_dre : 'despesas_diversas')}</select>
+    </div>
+  `;
+  modalOverlay.classList.add('aberto');
+}
+
+document.getElementById('btnNovaCategoriaFinanceira').addEventListener('click', () => abrirModalCategoriaFinanceira(null));
+
+async function salvarNovaCategoriaFinanceira(){
+  const nome = document.getElementById('campoNomeCategoriaFinanceira').value.trim();
+  const tipo = document.getElementById('campoTipoCategoriaFinanceira').value;
+  const grupoDre = document.getElementById('campoGrupoCategoriaFinanceira').value;
+  const id = modoModal.id;
+
+  if (!nome){
+    mostrarToast('Informe o nome da categoria.', 'erro');
+    return;
+  }
+
+  const btnSalvar = document.getElementById('btnSalvarModal');
+  btnSalvar.disabled = true;
+  btnSalvar.textContent = 'Salvando...';
+
+  let erro;
+  if (id){
+    ({ error: erro } = await supabaseClient.from('categorias_financeiras').update({ nome, tipo, grupo_dre: grupoDre }).eq('id', id));
+  } else {
+    ({ error: erro } = await supabaseClient.from('categorias_financeiras').insert({ nome, tipo, grupo_dre: grupoDre }));
+  }
+
+  btnSalvar.disabled = false;
+  btnSalvar.textContent = 'Salvar';
+
+  if (erro){
+    mostrarToast(erro.message || 'Não foi possível salvar a categoria.', 'erro');
+    return;
+  }
+
+  mostrarToast(id ? 'Categoria atualizada!' : 'Categoria criada!');
+  fecharModal();
+  carregarCategoriasFinanceiras();
+}
+
+async function excluirCategoriaFinanceira(id){
+  if (!window.confirm('Excluir esta categoria? Lançamentos que já usam ela ficam sem categoria (continuam visíveis na DRE, na linha "Sem categoria").')) return;
+  const { error } = await supabaseClient.from('categorias_financeiras').delete().eq('id', id);
+  if (error){
+    mostrarToast('Não foi possível excluir a categoria.', 'erro');
+    return;
+  }
+  mostrarToast('Categoria excluída.');
+  carregarCategoriasFinanceiras();
+}
+
+// --------------------------------------------------------
+// IMPRESSÃO DE COMANDA (configuração singleton — uma linha só)
+// --------------------------------------------------------
+let configImpressaoId = null;
+
+async function carregarConfigImpressao(){
+  const { data, error } = await supabaseClient.from('configuracao_impressao').select('*').limit(1).single();
+
+  if (error || !data){
+    mostrarToast('Não foi possível carregar a configuração de impressão. Se ainda não rodou, execute o SQL migracao-config-impressao.sql no Supabase.', 'erro');
+    return;
+  }
+
+  configImpressaoId = data.id;
+  document.getElementById('campoNomeLojaImpressao').value = data.nome_loja || '';
+  document.getElementById('campoEnderecoLojaImpressao').value = data.endereco_loja || '';
+  document.getElementById('campoTelefoneLojaImpressao').value = data.telefone_loja || '';
+  document.getElementById('campoCnpjLojaImpressao').value = data.cnpj_loja || '';
+  document.getElementById('campoLarguraPapelImpressao').value = data.largura_papel || '80mm';
+  document.getElementById('campoMensagemRodapeImpressao').value = data.mensagem_rodape || '';
+  document.getElementById('campoAvisoNaoFiscalImpressao').checked = data.mostrar_aviso_nao_fiscal !== false;
+}
+
+document.getElementById('btnSalvarConfigImpressao').addEventListener('click', async () => {
+  if (!configImpressaoId){
+    mostrarToast('Configuração ainda não carregada — aguarde um instante e tente de novo.', 'erro');
+    return;
+  }
+
+  const dados = {
+    nome_loja: document.getElementById('campoNomeLojaImpressao').value.trim() || null,
+    endereco_loja: document.getElementById('campoEnderecoLojaImpressao').value.trim() || null,
+    telefone_loja: document.getElementById('campoTelefoneLojaImpressao').value.trim() || null,
+    cnpj_loja: document.getElementById('campoCnpjLojaImpressao').value.trim() || null,
+    largura_papel: document.getElementById('campoLarguraPapelImpressao').value,
+    mensagem_rodape: document.getElementById('campoMensagemRodapeImpressao').value.trim() || null,
+    mostrar_aviso_nao_fiscal: document.getElementById('campoAvisoNaoFiscalImpressao').checked,
+  };
+
+  const btn = document.getElementById('btnSalvarConfigImpressao');
+  btn.disabled = true;
+  btn.textContent = 'Salvando...';
+
+  const { error } = await supabaseClient.from('configuracao_impressao').update(dados).eq('id', configImpressaoId);
+
+  btn.disabled = false;
+  btn.textContent = 'Salvar';
+
+  if (error){
+    mostrarToast(error.message || 'Não foi possível salvar.', 'erro');
+    return;
+  }
+
+  mostrarToast('Configuração de impressão atualizada!');
+});

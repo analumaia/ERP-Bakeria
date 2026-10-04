@@ -10,6 +10,57 @@
    depois de supabase-config.js + a biblioteca do Supabase.
    ============================================================ */
 
+// --------------------------------------------------------
+// Fuso horário: todo o sistema trabalha em horário de Brasília
+// (America/Sao_Paulo), independente do fuso do computador/celular.
+// agoraBrasilia() devolve um Date cujos getters (getFullYear,
+// getMonth, getDate...) já refletem o relógio de Brasília — assim
+// o código existente que monta datas com esses getters continua
+// valendo. O Brasil não tem horário de verão desde 2019, então
+// o offset fixo -03:00 é seguro para montar intervalos de consulta.
+// --------------------------------------------------------
+const FUSO_BRASILIA = 'America/Sao_Paulo';
+const OFFSET_BRASILIA = '-03:00';
+
+function agoraBrasilia(){
+  const partes = {};
+  new Intl.DateTimeFormat('en-CA', {
+    timeZone: FUSO_BRASILIA, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  }).formatToParts(new Date()).forEach(p => { partes[p.type] = p.value; });
+  return new Date(
+    Number(partes.year), Number(partes.month) - 1, Number(partes.day),
+    Number(partes.hour) % 24, Number(partes.minute), Number(partes.second)
+  );
+}
+
+function dataLocalISO(data){
+  return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, '0')}-${String(data.getDate()).padStart(2, '0')}`;
+}
+
+function hojeISO(){ return dataLocalISO(agoraBrasilia()); }        // AAAA-MM-DD de hoje em Brasília
+function mesAtualISO(){ return hojeISO().slice(0, 7); }             // AAAA-MM do mês atual em Brasília
+
+// Formata um instante (timestamp do banco) sempre em horário de Brasília
+function formatarDataHoraBrasilia(valor, opcoes){
+  return new Date(valor).toLocaleString('pt-BR', Object.assign({ timeZone: FUSO_BRASILIA }, opcoes || {}));
+}
+
+// --------------------------------------------------------
+// Segurança: escapa texto antes de entrar em innerHTML / atributos.
+// Use esc() em TODO dado vindo do banco ou digitado pelo usuário.
+// --------------------------------------------------------
+function esc(valor){
+  if (valor === null || valor === undefined) return '';
+  return String(valor)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const supabaseClient = window.supabase.createClient(
   window.SUPABASE_URL,
   window.SUPABASE_ANON_KEY
@@ -18,17 +69,26 @@ const supabaseClient = window.supabase.createClient(
 // --------------------------------------------------------
 // Abas do painel
 // --------------------------------------------------------
-const ABAS = ['dashboard', 'estoque', 'compras', 'producao', 'vendas', 'financeiro', 'insumos', 'produtos', 'fornecedores', 'clientes', 'configuracoes'];
-const ICONES_ABA = { dashboard: '🎯', estoque: '📊', compras: '🛒', producao: '🏭', vendas: '💰', financeiro: '💵', insumos: '🌾', produtos: '🧁', fornecedores: '📦', clientes: '👤', configuracoes: '⚙️' };
-const TITULOS_ABA = { dashboard: 'Visão geral', estoque: 'Estoque', compras: 'Compras', producao: 'Produção', vendas: 'Vendas', financeiro: 'Financeiro', insumos: 'Insumos', produtos: 'Produtos', fornecedores: 'Fornecedores', clientes: 'Clientes', configuracoes: 'Configurações' };
+const ABAS = ['dashboard', 'estoque', 'compras', 'producao', 'fichas', 'vendas', 'financeiro', 'caixa', 'insumos', 'embalagens', 'produtos', 'fornecedores', 'clientes', 'configuracoes'];
+
+// Estrutura do menu lateral: grupos com sub-itens (cada item, inclusive o grupo, abre uma tela)
+const MENU_LATERAL = [
+  { chave: 'dashboard' },
+  { chave: 'vendas', filhos: ['clientes', 'produtos'] },
+  { chave: 'estoque', filhos: ['producao', 'fichas', 'compras', 'insumos', 'embalagens', 'fornecedores'] },
+  { chave: 'financeiro', filhos: ['caixa'] },
+  { chave: 'configuracoes' },
+];
+const ICONES_ABA = { dashboard: '🎯', estoque: '📊', compras: '🛒', producao: '🏭', fichas: '📋', vendas: '💰', financeiro: '💵', caixa: '🧾', insumos: '🌾', embalagens: '🎁', produtos: '🧁', fornecedores: '📦', clientes: '👤', configuracoes: '⚙️' };
+const TITULOS_ABA = { dashboard: 'Visão geral', estoque: 'Estoque', compras: 'Compras', producao: 'Produção', fichas: 'Fichas técnicas', vendas: 'Vendas', financeiro: 'Financeiro', caixa: 'Controle de caixa', insumos: 'Insumos', embalagens: 'Embalagens', produtos: 'Produtos', fornecedores: 'Fornecedores', clientes: 'Clientes', configuracoes: 'Configurações' };
 
 // --------------------------------------------------------
 // Estado compartilhado entre módulos
 // --------------------------------------------------------
 // cache em memória dos dados carregados de cada cadastro, pra busca local
 const dadosCarregados = {};
-// cache separado dos dados de estoque (join com insumos/produtos, incluindo inativos)
-const dadosEstoque = { insumos: [], produtos: [] };
+// cache separado dos dados de estoque (join com insumos/produtos/fichas/embalagens, incluindo inativos)
+const dadosEstoque = { insumos: [], produtos: [], fichas: [], embalagens: [] };
 let moduloAtivo = 'dashboard';
 // diz qual módulo é dono do que está aberto no modal no momento, e com
 // que dados — cada módulo lê/escreve isso ao abrir e salvar seu modal
@@ -65,19 +125,40 @@ function mostrarToast(texto, tipo = 'sucesso'){
 // --------------------------------------------------------
 function montarAbas(){
   const nav = document.getElementById('abasModulos');
-  nav.innerHTML = ABAS.map(chave => `
-    <button class="aba-modulo ${chave === moduloAtivo ? 'ativa' : ''}" data-aba="${chave}">
-      <span class="icone">${ICONES_ABA[chave]}</span> ${TITULOS_ABA[chave]}
+
+  const botaoMenu = (chave, ehSubItem) => `
+    <button class="aba-modulo ${ehSubItem ? 'sub' : ''} ${chave === moduloAtivo ? 'ativa' : ''}" data-aba="${chave}">
+      ${ehSubItem ? '' : `<span class="icone">${ICONES_ABA[chave]}</span>`}${TITULOS_ABA[chave]}
     </button>
-  `).join('');
+  `;
+
+  nav.innerHTML = '<div class="menu-titulo">MENU</div>' + MENU_LATERAL.map(grupo =>
+    botaoMenu(grupo.chave, false) + (grupo.filhos || []).map(f => botaoMenu(f, true)).join('')
+  ).join('');
 
   nav.querySelectorAll('[data-aba]').forEach(botao => {
     botao.addEventListener('click', () => trocarAba(botao.dataset.aba));
   });
 }
 
+// Menu lateral em telas pequenas (vira gaveta, aberta pelo botão ☰ do cabeçalho)
+const menuLateral = document.getElementById('menuLateral');
+const menuFundo = document.getElementById('menuFundo');
+const btnMenu = document.getElementById('btnMenu');
+
+function alternarMenuLateral(abrir){
+  const abrindo = typeof abrir === 'boolean' ? abrir : !menuLateral.classList.contains('aberto');
+  menuLateral.classList.toggle('aberto', abrindo);
+  menuFundo.classList.toggle('visivel', abrindo);
+  btnMenu.setAttribute('aria-expanded', String(abrindo));
+}
+btnMenu.addEventListener('click', () => alternarMenuLateral());
+menuFundo.addEventListener('click', () => alternarMenuLateral(false));
+
 function trocarAba(chave){
   moduloAtivo = chave;
+  alternarMenuLateral(false);
+  window.scrollTo({ top: 0 });
   document.querySelectorAll('.aba-modulo').forEach(b => {
     b.classList.toggle('ativa', b.dataset.aba === chave);
   });
@@ -92,13 +173,28 @@ function trocarAba(chave){
     carregarCompras();
   } else if (chave === 'producao'){
     carregarProducao();
+  } else if (chave === 'fichas'){
+    carregarFichas();
+  } else if (chave === 'produtos'){
+    carregarProdutosTabela(); // fora de MODULOS — tela própria (tabela + composição)
+  } else if (chave === 'insumos'){
+    carregarInsumosTabela(); // fora de MODULOS — tela própria (tabela + relacionados)
+  } else if (chave === 'embalagens'){
+    carregarEmbalagensTabela(); // fora de MODULOS — tela própria (tabela)
+  } else if (chave === 'clientes'){
+    carregarClientes(); // fora de MODULOS — tela própria (form fixo + nº de compras)
   } else if (chave === 'vendas'){
     carregarVendas();
+  } else if (chave === 'caixa'){
+    carregarCaixa(); // ex-Financeiro: entradas e saídas da empresa
   } else if (chave === 'financeiro'){
-    carregarFinanceiro();
+    // reservado para novos recursos — sem carregamento por enquanto
+    // (precisa deste ramo pra não cair no carregamento genérico abaixo)
   } else if (chave === 'configuracoes'){
     carregarMetas();
     carregarFormasPagamento();
+    carregarCategoriasFinanceiras();
+    carregarConfigImpressao();
   } else if (!dadosCarregados[chave]){
     carregarModulo(chave);
   }

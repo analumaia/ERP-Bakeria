@@ -4,21 +4,25 @@
    com ações de entrada, saída e balanço (contagem física).
    ============================================================ */
 
-let itemEstoqueAtual = null; // { tipoItem, itemId } do item em exibição no momento
+let itemEstoqueAtual = null; // { tipoItem, itemId, nome, saldoAtual, unidade } do item em exibição no momento
 
 async function carregarEstoque(){
-  const [respInsumos, respProdutos] = await Promise.all([
+  const [respInsumos, respProdutos, respFichas, respEmbalagens] = await Promise.all([
     supabaseClient.from('insumos').select('*, estoque_insumos(saldo_atual)').order('nome'),
     supabaseClient.from('produtos').select('*, estoque_produtos(saldo_atual)').order('nome'),
+    supabaseClient.from('receitas').select('*, estoque_fichas(saldo_atual)').order('nome'),
+    supabaseClient.from('embalagens').select('*, estoque_embalagens(saldo_atual)').order('nome'),
   ]);
 
-  if (respInsumos.error || respProdutos.error){
+  if (respInsumos.error || respProdutos.error || respFichas.error || respEmbalagens.error){
     mostrarToast('Erro ao carregar o estoque.', 'erro');
     return;
   }
 
   dadosEstoque.insumos = respInsumos.data;
   dadosEstoque.produtos = respProdutos.data;
+  dadosEstoque.fichas = respFichas.data;
+  dadosEstoque.embalagens = respEmbalagens.data;
 
   popularBuscaItemEstoque();
 
@@ -28,120 +32,309 @@ async function carregarEstoque(){
 }
 
 function saldoDoItem(tipoItem, item){
-  const relacao = tipoItem === 'insumo' ? item.estoque_insumos : item.estoque_produtos;
+  const relacao = tipoItem === 'insumo' ? item.estoque_insumos
+    : tipoItem === 'produto' ? item.estoque_produtos
+    : tipoItem === 'ficha' ? item.estoque_fichas
+    : item.estoque_embalagens;
   // O Supabase pode devolver essa relação como objeto único (1-pra-1) ou
   // como lista de 1 item, dependendo da versão/detecção da FK — tratamos os dois casos.
   const registroSaldo = Array.isArray(relacao) ? relacao[0] : relacao;
   return registroSaldo ? Number(registroSaldo.saldo_atual) : 0;
 }
 
-function popularBuscaItemEstoque(){
-  const select = document.getElementById('buscaItemEstoque');
-  const valorSelecionado = select.value;
+// --------------------------------------------------------
+// Busca digitável de item (combobox): digite pra filtrar (sem
+// diferenciar acento/maiúscula); ↑/↓ + Enter ou clique escolhem.
+// --------------------------------------------------------
+const comboInput = document.getElementById('buscaItemEstoque');
+const comboLista = document.getElementById('listaComboItem');
+const comboLimpar = document.getElementById('btnLimparItemEstoque');
+let opcoesEstoque = [];       // [{ valor, nome, grupo, abaixo, inativo }]
+let valorItemSelecionado = ''; // "insumo:ID" / "produto:ID" ou '' quando nada escolhido
+let opcoesVisiveis = [];      // opções listadas agora, na ordem exibida
+let opcaoAtiva = -1;
+let comboFiltrando = false;   // true depois que a pessoa digita; false = lista inteira
 
-  function rotulo(item, tipoItem){
-    const saldo = saldoDoItem(tipoItem, item);
-    const abaixoDoMinimo = item.estoque_minimo != null && saldo < Number(item.estoque_minimo);
-    return (abaixoDoMinimo ? '⚠️ ' : '') + item.nome + (item.ativo === false ? ' (inativo)' : '');
-  }
-
-  select.innerHTML = `
-    <option value="">Buscar insumo ou produto...</option>
-    <optgroup label="Insumos">
-      ${dadosEstoque.insumos.map(i => `<option value="insumo:${i.id}">${rotulo(i, 'insumo')}</option>`).join('')}
-    </optgroup>
-    <optgroup label="Produtos">
-      ${dadosEstoque.produtos.map(p => `<option value="produto:${p.id}">${rotulo(p, 'produto')}</option>`).join('')}
-    </optgroup>
-  `;
-  select.value = valorSelecionado;
+function normalizarBusca(texto){
+  return String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
 
-document.getElementById('buscaItemEstoque').addEventListener('change', (evento) => buscarItemEstoque(evento.target.value));
+function popularBuscaItemEstoque(){
+  const montar = (lista, tipoItem, grupo) => lista.map(item => ({
+    valor: `${tipoItem}:${item.id}`,
+    nome: item.nome,
+    grupo,
+    abaixo: item.estoque_minimo != null && saldoDoItem(tipoItem, item) < Number(item.estoque_minimo),
+    inativo: item.ativo === false,
+  }));
+  opcoesEstoque = [
+    ...montar(dadosEstoque.insumos, 'insumo', 'Insumos'),
+    ...montar(dadosEstoque.produtos, 'produto', 'Produtos'),
+    ...montar(dadosEstoque.fichas, 'ficha', 'Fichas técnicas'),
+    ...montar(dadosEstoque.embalagens, 'embalagem', 'Embalagens'),
+  ];
+  if (!comboLista.hidden) renderizarListaCombo();
+}
+
+function renderizarListaCombo(){
+  const termo = comboFiltrando ? normalizarBusca(comboInput.value) : '';
+  opcoesVisiveis = opcoesEstoque.filter(o => !termo || normalizarBusca(o.nome).includes(termo));
+  if (opcaoAtiva >= opcoesVisiveis.length) opcaoAtiva = opcoesVisiveis.length - 1;
+
+  if (opcoesVisiveis.length === 0){
+    comboLista.innerHTML = '<div class="combo-vazio">Nenhum item encontrado.</div>';
+    return;
+  }
+
+  let html = '';
+  let grupoAtual = '';
+  opcoesVisiveis.forEach((o, i) => {
+    if (o.grupo !== grupoAtual){
+      grupoAtual = o.grupo;
+      html += `<div class="combo-grupo" role="presentation">${esc(o.grupo)}</div>`;
+    }
+    const selecionada = o.valor === valorItemSelecionado;
+    html += `<div class="combo-opcao${i === opcaoAtiva ? ' ativa' : ''}${selecionada ? ' selecionada' : ''}" role="option" id="opcaoCombo${i}" data-indice="${i}" aria-selected="${selecionada}">${o.abaixo ? '⚠️ ' : ''}${esc(o.nome)}${o.inativo ? ' (inativo)' : ''}</div>`;
+  });
+  comboLista.innerHTML = html;
+
+  const ativa = comboLista.querySelector('.ativa');
+  if (ativa) ativa.scrollIntoView({ block: 'nearest' });
+}
+
+function abrirListaCombo(){
+  comboLista.hidden = false;
+  comboInput.setAttribute('aria-expanded', 'true');
+  renderizarListaCombo();
+}
+
+function fecharListaCombo(){
+  comboLista.hidden = true;
+  comboInput.setAttribute('aria-expanded', 'false');
+  comboInput.removeAttribute('aria-activedescendant');
+  opcaoAtiva = -1;
+  comboFiltrando = false;
+  // o campo sempre volta a mostrar o item realmente escolhido (ou vazio)
+  const escolhida = opcoesEstoque.find(o => o.valor === valorItemSelecionado);
+  comboInput.value = escolhida ? escolhida.nome : '';
+}
+
+function escolherOpcaoCombo(valor){
+  valorItemSelecionado = valor;
+  comboLimpar.hidden = false;
+  fecharListaCombo();
+  comboInput.blur();
+  buscarItemEstoque(valor);
+}
+
+comboInput.addEventListener('focus', () => {
+  comboInput.select();
+  abrirListaCombo();
+});
+comboInput.addEventListener('click', () => {
+  if (comboLista.hidden) abrirListaCombo();
+});
+comboInput.addEventListener('input', () => {
+  comboFiltrando = true;
+  opcaoAtiva = 0; // já deixa o primeiro resultado pronto pro Enter
+  abrirListaCombo();
+});
+comboInput.addEventListener('blur', fecharListaCombo);
+comboInput.addEventListener('keydown', (evento) => {
+  if (evento.key === 'ArrowDown' || evento.key === 'ArrowUp'){
+    evento.preventDefault();
+    if (comboLista.hidden) abrirListaCombo();
+    const total = opcoesVisiveis.length;
+    if (total === 0) return;
+    if (opcaoAtiva < 0){
+      opcaoAtiva = evento.key === 'ArrowDown' ? 0 : total - 1;
+    } else {
+      opcaoAtiva = (opcaoAtiva + (evento.key === 'ArrowDown' ? 1 : -1) + total) % total;
+    }
+    renderizarListaCombo();
+    comboInput.setAttribute('aria-activedescendant', 'opcaoCombo' + opcaoAtiva);
+  } else if (evento.key === 'Enter'){
+    if (!comboLista.hidden && opcoesVisiveis.length > 0){
+      evento.preventDefault();
+      escolherOpcaoCombo(opcoesVisiveis[Math.max(opcaoAtiva, 0)].valor);
+    }
+  } else if (evento.key === 'Escape'){
+    fecharListaCombo();
+    comboInput.blur();
+  }
+});
+
+// mousedown (e não click) pra escolher antes de o campo perder o foco
+comboLista.addEventListener('mousedown', (evento) => {
+  evento.preventDefault();
+  const opcao = evento.target.closest('[data-indice]');
+  if (opcao) escolherOpcaoCombo(opcoesVisiveis[Number(opcao.dataset.indice)].valor);
+});
+comboLimpar.addEventListener('mousedown', (evento) => {
+  evento.preventDefault();
+  buscarItemEstoque('');
+  comboInput.focus();
+});
+
+// --------------------------------------------------------
+// Elementos fixos da tela (o HTML está em painel.html)
+// --------------------------------------------------------
+const campoPeriodoDe = document.getElementById('periodoEstoqueDe');
+const campoPeriodoAte = document.getElementById('periodoEstoqueAte');
+const botoesAcaoEstoque = ['btnEntradaItem', 'btnSaidaItem', 'btnBalancoItem'].map(id => document.getElementById(id));
+let requisicaoExtrato = 0; // evita que uma resposta antiga sobrescreva uma mais nova
+
+document.getElementById('btnEntradaItem').addEventListener('click', () => {
+  if (itemEstoqueAtual) abrirModalMovimento('entrada', itemEstoqueAtual.tipoItem, itemEstoqueAtual.itemId, itemEstoqueAtual.nome);
+});
+document.getElementById('btnSaidaItem').addEventListener('click', () => {
+  if (itemEstoqueAtual) abrirModalMovimento('saida', itemEstoqueAtual.tipoItem, itemEstoqueAtual.itemId, itemEstoqueAtual.nome);
+});
+document.getElementById('btnBalancoItem').addEventListener('click', () => {
+  const i = itemEstoqueAtual;
+  if (i) abrirModalBalancoItem(i.tipoItem, i.itemId, i.nome, i.saldoAtual, i.unidade);
+});
+
+// --------------------------------------------------------
+// Período — filtra os totais de entradas/saídas e o extrato.
+// O saldo atual nunca depende dele.
+// --------------------------------------------------------
+// dataLocalISO agora vive em core.js (horário de Brasília)
+
+function definirPeriodoEstoque(tipo){
+  const hoje = agoraBrasilia();
+  let de = '', ate = '';
+  if (tipo === 'mes'){
+    de = dataLocalISO(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    ate = dataLocalISO(new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0));
+  } else if (tipo === 'anterior'){
+    de = dataLocalISO(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1));
+    ate = dataLocalISO(new Date(hoje.getFullYear(), hoje.getMonth(), 0));
+  }
+  campoPeriodoDe.value = de;
+  campoPeriodoAte.value = ate;
+  recarregarExtratoAtual();
+}
+
+function recarregarExtratoAtual(){
+  if (!itemEstoqueAtual) return;
+  if (campoPeriodoDe.value && campoPeriodoAte.value && campoPeriodoDe.value > campoPeriodoAte.value){
+    mostrarToast('A data inicial não pode ser depois da data final.', 'erro');
+    return;
+  }
+  carregarExtratoItem();
+}
+
+campoPeriodoDe.addEventListener('change', recarregarExtratoAtual);
+campoPeriodoAte.addEventListener('change', recarregarExtratoAtual);
+document.querySelectorAll('[data-periodo-estoque]').forEach(botao => {
+  botao.addEventListener('click', () => definirPeriodoEstoque(botao.dataset.periodoEstoque));
+});
+definirPeriodoEstoque('mes'); // começa no mês atual
+mostrarEstadoSemItem(); // estado inicial: nenhum item escolhido
+
+// --------------------------------------------------------
+// Item selecionado
+// --------------------------------------------------------
+function mostrarEstadoSemItem(){
+  itemEstoqueAtual = null;
+  requisicaoExtrato++;
+  valorItemSelecionado = '';
+  comboInput.value = '';
+  comboLimpar.hidden = true;
+  document.getElementById('etiquetasItemEstoque').innerHTML = '';
+  botoesAcaoEstoque.forEach(botao => { botao.disabled = true; });
+  ['saldoItemEstoque', 'totalEntradasEstoque', 'totalSaidasEstoque'].forEach(id => { document.getElementById(id).textContent = '—'; });
+  ['minimoItemEstoque', 'subEntradasEstoque', 'subSaidasEstoque', 'notaExtratoEstoque'].forEach(id => { document.getElementById(id).textContent = ''; });
+  document.getElementById('tabelaItemEstoque').innerHTML = '<div class="lista-vazia">Escolha um insumo, produto, ficha técnica ou embalagem acima pra ver o saldo, os totais do período e o extrato de movimentações.</div>';
+}
 
 async function buscarItemEstoque(valor){
-  const area = document.getElementById('areaItemEstoque');
-
   if (!valor){
-    itemEstoqueAtual = null;
-    area.innerHTML = '<div class="lista-vazia">Busque um insumo ou produto acima pra ver o saldo, o resumo e o extrato completo de movimentações dele.</div>';
+    mostrarEstadoSemItem();
     return;
   }
 
   const [tipoItem, itemId] = valor.split(':');
-  itemEstoqueAtual = { tipoItem, itemId };
-
-  const lista = tipoItem === 'insumo' ? dadosEstoque.insumos : dadosEstoque.produtos;
+  const lista = tipoItem === 'insumo' ? dadosEstoque.insumos
+    : tipoItem === 'produto' ? dadosEstoque.produtos
+    : tipoItem === 'ficha' ? dadosEstoque.fichas
+    : dadosEstoque.embalagens;
   const item = lista.find(r => String(r.id) === String(itemId));
-  if (!item) return;
-
-  const saldoAtual = saldoDoItem(tipoItem, item);
-  const unidade = tipoItem === 'insumo' ? item.unidade_medida : 'un';
-  const abaixoDoMinimo = item.estoque_minimo != null && saldoAtual < Number(item.estoque_minimo);
-
-  area.innerHTML = `
-    <div class="cartao-item" style="margin-bottom:14px;">
-      <div class="titulo-item">
-        <span style="font-size:1.15rem;">${item.nome}</span>
-        ${item.ativo === false ? '<span class="badge-inativo">Inativo</span>' : ''}
-        ${abaixoDoMinimo ? '<span class="badge-estoque-baixo">Abaixo do mínimo</span>' : ''}
-      </div>
-      <div class="acoes-item" style="margin-top:10px;">
-        <button class="btn-acao" id="btnEntradaItem">+ Entrada</button>
-        <button class="btn-acao" id="btnSaidaItem">− Saída</button>
-        <button class="btn-acao" id="btnBalancoItem">📋 Balanço</button>
-      </div>
-    </div>
-    <div class="lista-cards" id="resumoItemEstoque" style="margin-bottom:14px;"></div>
-    <div id="tabelaItemEstoque"></div>
-  `;
-
-  document.getElementById('btnEntradaItem').addEventListener('click', () => abrirModalMovimento('entrada', tipoItem, itemId, item.nome));
-  document.getElementById('btnSaidaItem').addEventListener('click', () => abrirModalMovimento('saida', tipoItem, itemId, item.nome));
-  document.getElementById('btnBalancoItem').addEventListener('click', () => abrirModalBalancoItem(tipoItem, itemId, item.nome, saldoAtual, unidade));
-
-  await carregarExtratoItem(tipoItem, itemId, saldoAtual, unidade);
-}
-
-async function carregarExtratoItem(tipoItem, itemId, saldoAtual, unidade){
-  const resumo = document.getElementById('resumoItemEstoque');
-  const tabela = document.getElementById('tabelaItemEstoque');
-  resumo.innerHTML = '<div class="lista-vazia">Carregando...</div>';
-  tabela.innerHTML = '';
-
-  const { data, error } = await supabaseClient
-    .from('movimentacoes_estoque')
-    .select('*')
-    .eq('tipo_item', tipoItem)
-    .eq('item_id', itemId)
-    .order('criado_em', { ascending: false })
-    .limit(300);
-
-  if (error){
-    resumo.innerHTML = '<div class="lista-vazia">Não foi possível carregar o extrato deste item.</div>';
+  if (!item){
+    mostrarEstadoSemItem();
     return;
   }
 
-  const totalEntradas = data.filter(m => m.tipo_movimento === 'entrada').reduce((s, m) => s + Number(m.quantidade), 0);
-  const totalSaidas = data.filter(m => m.tipo_movimento === 'saida').reduce((s, m) => s + Number(m.quantidade), 0);
+  const saldoAtual = saldoDoItem(tipoItem, item);
+  const unidade = tipoItem === 'insumo' ? item.unidade_medida : tipoItem === 'ficha' ? item.rendimento_unidade : 'un';
+  const abaixoDoMinimo = item.estoque_minimo != null && saldoAtual < Number(item.estoque_minimo);
+  itemEstoqueAtual = { tipoItem, itemId, nome: item.nome, saldoAtual, unidade };
+  valorItemSelecionado = valor;
+  comboLimpar.hidden = false;
+  if (document.activeElement !== comboInput) comboInput.value = item.nome;
 
-  resumo.innerHTML = `
-    <div class="cartao-item">
-      <div class="titulo-item"><span>Saldo atual</span></div>
-      <div class="linha-info" style="font-size:1.3rem; font-weight:700;"><span></span><span>${saldoAtual.toLocaleString('pt-BR')} ${unidade}</span></div>
-    </div>
-    <div class="cartao-item">
-      <div class="titulo-item"><span>Total de entradas</span></div>
-      <div class="linha-info" style="font-size:1.3rem; font-weight:700;"><span></span><span class="valor-entrada">${totalEntradas.toLocaleString('pt-BR')} ${unidade}</span></div>
-    </div>
-    <div class="cartao-item">
-      <div class="titulo-item"><span>Total de saídas</span></div>
-      <div class="linha-info" style="font-size:1.3rem; font-weight:700;"><span></span><span class="valor-saida">${totalSaidas.toLocaleString('pt-BR')} ${unidade}</span></div>
-    </div>
-  `;
+  document.getElementById('etiquetasItemEstoque').innerHTML =
+    (item.ativo === false ? '<span class="badge-inativo">Inativo</span>' : '') +
+    (abaixoDoMinimo ? '<span class="badge-estoque-baixo">Abaixo do estoque mínimo</span>' : '');
+  botoesAcaoEstoque.forEach(botao => { botao.disabled = false; });
+  document.getElementById('saldoItemEstoque').textContent = `${saldoAtual.toLocaleString('pt-BR')} ${unidade}`;
+  document.getElementById('minimoItemEstoque').textContent = item.estoque_minimo != null
+    ? `Estoque mínimo: ${Number(item.estoque_minimo).toLocaleString('pt-BR')} ${unidade}`
+    : 'Sem estoque mínimo definido';
+
+  await carregarExtratoItem();
+}
+
+const LIMITE_EXTRATO = 1000;
+
+async function carregarExtratoItem(){
+  const { tipoItem, itemId, unidade } = itemEstoqueAtual;
+  const requisicao = ++requisicaoExtrato;
+  const tabela = document.getElementById('tabelaItemEstoque');
+  const elEntradas = document.getElementById('totalEntradasEstoque');
+  const elSaidas = document.getElementById('totalSaidasEstoque');
+
+  tabela.innerHTML = '<div class="lista-vazia">Carregando...</div>';
+  elEntradas.textContent = '…';
+  elSaidas.textContent = '…';
+
+  let consulta = tipoItem === 'ficha'
+    ? supabaseClient.from('movimentacoes_fichas').select('*').eq('ficha_id', itemId)
+    : supabaseClient.from('movimentacoes_estoque').select('*').eq('tipo_item', tipoItem).eq('item_id', itemId);
+  if (campoPeriodoDe.value){
+    consulta = consulta.gte('criado_em', new Date(campoPeriodoDe.value + 'T00:00:00' + OFFSET_BRASILIA).toISOString());
+  }
+  if (campoPeriodoAte.value){
+    consulta = consulta.lte('criado_em', new Date(campoPeriodoAte.value + 'T23:59:59.999' + OFFSET_BRASILIA).toISOString());
+  }
+  const { data, error } = await consulta.order('criado_em', { ascending: false }).limit(LIMITE_EXTRATO);
+
+  if (requisicao !== requisicaoExtrato) return; // o item ou o período mudou enquanto carregava
+
+  if (error){
+    elEntradas.textContent = '—';
+    elSaidas.textContent = '—';
+    tabela.innerHTML = '<div class="lista-vazia">Não foi possível carregar o extrato deste item.</div>';
+    return;
+  }
+
+  const entradas = data.filter(m => m.tipo_movimento === 'entrada');
+  const saidas = data.filter(m => m.tipo_movimento === 'saida');
+  const totalEntradas = entradas.reduce((s, m) => s + Number(m.quantidade), 0);
+  const totalSaidas = saidas.reduce((s, m) => s + Number(m.quantidade), 0);
+  const rotuloMov = n => `${n} ${n === 1 ? 'movimentação' : 'movimentações'}`;
+
+  elEntradas.textContent = `${totalEntradas.toLocaleString('pt-BR')} ${unidade}`;
+  elSaidas.textContent = `${totalSaidas.toLocaleString('pt-BR')} ${unidade}`;
+  document.getElementById('subEntradasEstoque').textContent = rotuloMov(entradas.length);
+  document.getElementById('subSaidasEstoque').textContent = rotuloMov(saidas.length);
+  document.getElementById('notaExtratoEstoque').textContent = data.length >= LIMITE_EXTRATO
+    ? `Mostrando as ${LIMITE_EXTRATO.toLocaleString('pt-BR')} mais recentes — os totais consideram só essas`
+    : rotuloMov(data.length);
 
   if (data.length === 0){
-    tabela.innerHTML = '<div class="lista-vazia">Nenhuma movimentação registrada pra este item ainda.</div>';
+    tabela.innerHTML = '<div class="lista-vazia">Nenhuma movimentação deste item no período.</div>';
     return;
   }
 
@@ -153,14 +346,14 @@ async function carregarExtratoItem(tipoItem, itemId, saldoAtual, unidade){
         </thead>
         <tbody>
           ${data.map(m => {
-            const dataFormatada = new Date(m.criado_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+            const dataFormatada = formatarDataHoraBrasilia(m.criado_em, { dateStyle: 'short', timeStyle: 'short' });
             return `
               <tr>
                 <td>${dataFormatada}</td>
                 <td>${m.tipo_movimento === 'entrada' ? `<span class="valor-entrada">+${Number(m.quantidade).toLocaleString('pt-BR')}</span>` : '-'}</td>
                 <td>${m.tipo_movimento === 'saida' ? `<span class="valor-saida">−${Number(m.quantidade).toLocaleString('pt-BR')}</span>` : '-'}</td>
-                <td>${capitalizar(m.origem)}</td>
-                <td>${m.observacao || '-'}</td>
+                <td>${capitalizar(String(m.origem).replace(/_/g, ' '))}</td>
+                <td>${esc(m.observacao) || '-'}</td>
               </tr>
             `;
           }).join('')}
@@ -198,14 +391,22 @@ async function salvarMovimento(){
   btnSalvar.disabled = true;
   btnSalvar.textContent = 'Salvando...';
 
-  const { error } = await supabaseClient.from('movimentacoes_estoque').insert({
-    tipo_item: tipoItem,
-    item_id: itemId,
-    tipo_movimento: tipoMovimento,
-    quantidade,
-    origem: 'ajuste_manual',
-    observacao,
-  });
+  const { error } = tipoItem === 'ficha'
+    ? await supabaseClient.from('movimentacoes_fichas').insert({
+        ficha_id: itemId,
+        tipo_movimento: tipoMovimento,
+        quantidade,
+        origem: 'ajuste_manual',
+        observacao,
+      })
+    : await supabaseClient.from('movimentacoes_estoque').insert({
+        tipo_item: tipoItem,
+        item_id: itemId,
+        tipo_movimento: tipoMovimento,
+        quantidade,
+        origem: 'ajuste_manual',
+        observacao,
+      });
 
   btnSalvar.disabled = false;
   btnSalvar.textContent = 'Salvar';
@@ -254,14 +455,26 @@ async function salvarBalancoItem(){
   btnSalvar.disabled = true;
   btnSalvar.textContent = 'Salvando...';
 
-  const { error } = await supabaseClient.from('movimentacoes_estoque').insert({
-    tipo_item: tipoItem,
-    item_id: itemId,
-    tipo_movimento: diferenca > 0 ? 'entrada' : 'saida',
-    quantidade: Math.abs(diferenca),
-    origem: 'balanco',
-    observacao: `Ajuste de balanço: sistema tinha ${saldoAtual}, contagem física = ${contagem}`,
-  });
+  const tipoMovimentoBalanco = diferenca > 0 ? 'entrada' : 'saida';
+  const quantidadeBalanco = Math.abs(diferenca);
+  const observacaoBalanco = `Ajuste de balanço: sistema tinha ${saldoAtual}, contagem física = ${contagem}`;
+
+  const { error } = tipoItem === 'ficha'
+    ? await supabaseClient.from('movimentacoes_fichas').insert({
+        ficha_id: itemId,
+        tipo_movimento: tipoMovimentoBalanco,
+        quantidade: quantidadeBalanco,
+        origem: 'balanco',
+        observacao: observacaoBalanco,
+      })
+    : await supabaseClient.from('movimentacoes_estoque').insert({
+        tipo_item: tipoItem,
+        item_id: itemId,
+        tipo_movimento: tipoMovimentoBalanco,
+        quantidade: quantidadeBalanco,
+        origem: 'balanco',
+        observacao: observacaoBalanco,
+      });
 
   btnSalvar.disabled = false;
   btnSalvar.textContent = 'Salvar';
